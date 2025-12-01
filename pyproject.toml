@@ -1,0 +1,18 @@
+[project]
+name = "de1"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    "databricks-sql-connector>=4.2.1",
+    "great-expectations>=1.9.1",
+    "numpy>=2.3.5",
+    "openmeteo-requests>=1.7.4",
+    "pandas>=2.2.3",
+    "prefect>=3.6.4",
+    "python-dotenv>=1.2.1",
+    "requests-cache>=1.2.1",
+    "retry-requests>=2.0.0",
+    "yfinance>=0.2.66",
+]
