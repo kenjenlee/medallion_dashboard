@@ -1,27 +1,28 @@
 from prefect import flow, task
-from ingest_data import fetch_meteo_data
-from validate_gx import validate_data
-from load_databricks import load_data
+from ingest_bronze import bronze_pipeline
+from validate_silver import silver_pipeline
+from aggregate_gold import gold_pipeline
 
 @task
-def ingest():
-    return fetch_meteo_data()
+def bronze(local_csv):
+    return bronze_pipeline(local_csv)
 
 @task
-def validate():
-    return validate_data()
+def silver(local_csv):
+    return silver_pipeline(local_csv)
 
 @task
-def load():
-    return load_data()
+def gold(local_csv):
+    return gold_pipeline(local_csv)
 
 @flow(name='meteo_gx_databricks_pipeline')
-def pipeline():
-    ingest()
-    if validate():
-        load()
+# local_csv: don't write to bronze and silver, just gold
+def pipeline(local_csv=False):
+    bronze(local_csv)
+    if silver(local_csv):
+        gold(local_csv)
     else:
-        print('Validation failed. Data not loaded to databricks.')
+        print('Validation failed. Gold not processed.')
 
 if __name__=="__main__":
     pipeline()

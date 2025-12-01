@@ -1,9 +1,87 @@
 import great_expectations as gx
 import os
+import pandas as pd
 from config.settings import DATA_DIR, DATA_FILENAME, FORECAST_NDAYS, DATADOC_SITE_CONFIG, DOTENV_PATH
 from dotenv import load_dotenv
+from databricks import sql
 
-def validate_data():
+def load_bronze():
+    load_dotenv(dotenv_path=DOTENV_PATH)
+    
+    db_con = sql.connect(
+        server_hostname=os.getenv('DB_SERVER_HOSTNAME')
+        , http_path=os.getenv('DB_HTTP_PATH')
+        , access_token=os.getenv('DB_ACCESS_TOKEN')
+    )
+    cursor = db_con.cursor()
+    cursor.execute("""
+        select * from meteo_db.weather_bronze
+    """)
+    df = pd.DataFrame(
+        cursor.fetchall()
+        , columns=[
+            "date"
+            ,"temperature_2m"
+            ,"precipitation"
+            ,"relative_humidity_2m"
+            ,"apparent_temperature"
+            ,"visibility"
+            ,"cloud_cover"
+        ]
+    )
+    cursor.close()
+    db_con.close()
+    print('Bronze data loading done')
+    return df
+
+def write_silver(df):
+    load_dotenv(dotenv_path=DOTENV_PATH)
+    
+    db_con = sql.connect(
+        server_hostname=os.getenv('DB_SERVER_HOSTNAME')
+        , http_path=os.getenv('DB_HTTP_PATH')
+        , access_token=os.getenv('DB_ACCESS_TOKEN')
+    )
+    cursor = db_con.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS meteo_db.weather_silver (
+            date STRING
+            ,temperature_2m DOUBLE
+            ,precipitation DOUBLE
+            ,relative_humidity_2m DOUBLE
+            ,apparent_temperature DOUBLE
+            ,visibility DOUBLE
+            ,cloud_cover DOUBLE
+        ) USING DELTA
+    """)
+    cursor.execute("""DELETE FROM meteo_db.weather_silver""")
+
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT INTO meteo_db.weather_silver
+            (date,temperature_2m,precipitation
+            ,relative_humidity_2m,apparent_temperature
+            ,visibility,cloud_cover)
+            VALUES (?,?,?,?,?,?,?);
+        """, (
+            row['date']
+            , row['temperature_2m']
+            , row['precipitation']
+            , row['relative_humidity_2m']
+            , row['apparent_temperature']
+            , row['visibility']
+            , row['cloud_cover']
+        ))
+
+    db_con.commit()
+    cursor.close()
+    db_con.close()
+    print('Silver data writing done')
+    return df
+
+def validate_data(
+    load_from_local_copy:bool=False
+    , df:pd.DataFrame=None):
 
     # ref: https://docs.greatexpectations.io/docs/core/connect_to_data/filesystem_data
     context = gx.get_context()
@@ -15,28 +93,41 @@ def validate_data():
         , site_config = DATADOC_SITE_CONFIG
     )
 
-    # setup data source
     datasource_name = 'datasource'
-    data_source = context.data_sources.add_pandas_filesystem(
-        name=datasource_name
-        , base_directory=DATA_DIR
-    )
-
-    # setup data asset
     asset_name = 'dataasset'
-    data_asset = data_source.add_csv_asset(
-        name=asset_name
-    )
 
-    # Build batch request
-    batch_definition_name = DATA_FILENAME
-    # path below will be appended to the base_directory above
-    batch_definition_path = DATA_FILENAME
-    batch_definition = data_asset.add_batch_definition_path(
-        name=batch_definition_name
-        , path=batch_definition_path
-    )
+    if load_from_local_copy:
+        # setup data source
+        data_source = context.data_sources.add_pandas_filesystem(
+            name=datasource_name
+            , base_directory=DATA_DIR
+        )
+
+        # setup data asset
+        data_asset = data_source.add_csv_asset(
+            name=asset_name
+        )
+
+        # Build batch request
+        batch_definition_name = DATA_FILENAME
+        # path below will be appended to the base_directory above
+        batch_definition_path = DATA_FILENAME
+        batch_definition = data_asset.add_batch_definition_path(
+            name=batch_definition_name
+            , path=batch_definition_path
+        )
    
+    else:
+        # setup data source
+        data_source = context.data_sources.add_pandas(name=datasource_name)
+
+        # setup data asset
+        data_asset = data_source.add_dataframe_asset(name=asset_name)
+
+        # setup batch definition
+        batch_definition_name = 'batch_definition'
+        batch_definition = data_asset.add_batch_definition_whole_dataframe(batch_definition_name)
+
     # create expectation suite
     expectation_suite_name = 'expectationsuite'
     suite = context.suites.add(
@@ -119,10 +210,29 @@ def validate_data():
     )
 
     # Run validation
-    validation_results = checkpoint.run()
+    if load_from_local_copy:    
+        validation_results = checkpoint.run()
+    else:
+        batch_parameters = {'dataframe': df}
+        validation_results = checkpoint.run(
+            batch_parameters=batch_parameters
+        )
+    
     print(f'Validation is successful: {validation_results.success}')
     return validation_results.success
     
 
+def silver_pipeline(local_csv=False)->bool:
+    if local_csv:
+        df=pd.read_csv(os.path.join(DATA_DIR, DATA_FILENAME))
+    else:
+        df=load_bronze()
+    
+    if validate_data(load_from_local_copy=local_csv, df=df):
+        if not local_csv:
+            write_silver(df)
+        return True
+    return False
+
 if __name__=="__main__":
-    validate_data()
+    silver_pipeline()

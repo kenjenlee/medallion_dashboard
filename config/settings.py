@@ -11,7 +11,7 @@ DATA_FILENAME = 'api_data.csv'
 DOTENV_PATH = CONFIG_DIR / '.env'
 
 # for open-meteo
-FORECAST_NDAYS = 1
+FORECAST_NDAYS = 5
 
 # for great expectations
 # default settings from

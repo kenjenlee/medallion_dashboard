@@ -1,7 +1,10 @@
 import os
-from config.settings import DATA_DIR, DATA_FILENAME
+import pandas as pd
+from config.settings import DATA_DIR, DATA_FILENAME, DOTENV_PATH, FORECAST_NDAYS
+from dotenv import load_dotenv
+from databricks import sql
 
-# yfinance stopped working as of writing
+# yfinance is buggy as of writing
 def fetch_yfinance_data(stock_ticker='NVDA'):
     import yfinance as yf
     from datetime import datetime, timedelta
@@ -19,7 +22,8 @@ def fetch_yfinance_data(stock_ticker='NVDA'):
         ), index=True)
     return df
 
-def fetch_meteo_data():
+
+def fetch_meteo_data(save_local_copy=False):
     import openmeteo_requests
     import requests_cache
     import pandas as pd
@@ -38,7 +42,7 @@ def fetch_meteo_data():
         "longitude": 13.41,
         "hourly": ["temperature_2m", "precipitation", "relative_humidity_2m", "apparent_temperature", "visibility", "cloud_cover"],
         "timezone": "Asia/Singapore",
-        "forecast_days": 1,
+        "forecast_days": FORECAST_NDAYS,
     }
     responses = openmeteo.weather_api(url, params=params)
 
@@ -74,13 +78,67 @@ def fetch_meteo_data():
     hourly_data["cloud_cover"] = hourly_cloud_cover
 
     hourly_dataframe = pd.DataFrame(data = hourly_data)
-    hourly_dataframe.to_csv(os.path.join(
-        DATA_DIR
-        , DATA_FILENAME
-    ), index=False)
-    print(f'Data downloaded to {DATA_FILENAME}')
+    if save_local_copy:
+        hourly_dataframe.to_csv(os.path.join(
+            DATA_DIR
+            , DATA_FILENAME
+        ), index=False)
+        print(f'Data downloaded to {DATA_FILENAME}')
+    
+    print('Data ingestion done')
     return hourly_dataframe
 
+# write to databricks
+def write_bronze(df):
+    load_dotenv(dotenv_path=DOTENV_PATH)
+    
+    db_con = sql.connect(
+        server_hostname=os.getenv('DB_SERVER_HOSTNAME')
+        , http_path=os.getenv('DB_HTTP_PATH')
+        , access_token=os.getenv('DB_ACCESS_TOKEN')
+    )
+    cursor = db_con.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS meteo_db.weather_bronze (
+            date DATE
+            ,temperature_2m DOUBLE
+            ,precipitation DOUBLE
+            ,relative_humidity_2m DOUBLE
+            ,apparent_temperature DOUBLE
+            ,visibility DOUBLE
+            ,cloud_cover DOUBLE
+        ) USING DELTA
+    """)
+    cursor.execute("""DELETE FROM meteo_db.weather_bronze""")
+
+    for _, row in df.iterrows():
+        cursor.execute("""
+            INSERT INTO meteo_db.weather_bronze
+            (date,temperature_2m,precipitation
+            ,relative_humidity_2m,apparent_temperature
+            ,visibility,cloud_cover)
+            VALUES (?,?,?,?,?,?,?);
+        """, (
+            row['date']
+            , row['temperature_2m']
+            , row['precipitation']
+            , row['relative_humidity_2m']
+            , row['apparent_temperature']
+            , row['visibility']
+            , row['cloud_cover']
+        ))
+
+    db_con.commit()
+    cursor.close()
+    db_con.close()
+    print('Bronze data writing done')
+    return df
+
+
+def bronze_pipeline(local_csv=False):
+    df = fetch_meteo_data(local_csv)
+    if not local_csv:
+        write_bronze(df)
 
 if __name__ == "__main__":
-    fetch_meteo_data()
+    bronze_pipeline()
