@@ -1,6 +1,6 @@
 # Project Details
 
-**Tools/Languages used:** *pandas, great expectations, databricks, prefect, open-meteo API, SQL*
+**Tools/Languages used:** *Python (pandas, great expectations, prefect, open-meteo API), databricks, SQL*
 
 This project is intended to mirror an end-to-end data engineering pipeline, using a medallion architecture in databricks. In short, what it does includes:
 - Getting forecasted weather data from open-meteo API
